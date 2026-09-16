@@ -16,6 +16,14 @@ open class RSIShareViewController: SLComposeServiceViewController {
     var appGroupId = ""
     var sharedMedia: [SharedMediaFile] = []
 
+    private let mediaProcessingQueue = DispatchQueue(label: "receive_sharing_intent.media-processing")
+    private let mediaLoadGroup = DispatchGroup()
+    private var mediaLoadFailed = false
+    private var mediaLoadFinished = false
+    private var redirectRequested = false
+    private var redirectCompleted = false
+    private var pendingMessage: String?
+
     /// Override this method to return false if you don't want to redirect to host app automatically
     /// Default is true
     open func shouldAutoRedirect() -> Bool {
@@ -35,11 +43,18 @@ open class RSIShareViewController: SLComposeServiceViewController {
     
     // Redirect to host app when user click on Post
     open override func didSelectPost() {
-        saveAndRedirect(message: contentText)
+        redirectRequested = true
+        pendingMessage = contentText
+        redirectIfReady()
     }
     
     open override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+
+        // viewDidAppear can be called more than once while the extension is
+        // displayed. Loading the attachments twice would duplicate the share.
+        guard !mediaLoadFinished else { return }
+        mediaLoadFinished = true
         
         // This is called after the user selects Post. Do the upload of contentText and/or NSExtensionContext attachments.
         if let content = extensionContext!.inputItems[0] as? NSExtensionItem {
@@ -47,38 +62,42 @@ open class RSIShareViewController: SLComposeServiceViewController {
                 for (index, attachment) in (contents).enumerated() {
                     for type in SharedMediaType.allCases {
                         if attachment.hasItemConformingToTypeIdentifier(type.toUTTypeIdentifier) {
+                            mediaLoadGroup.enter()
                             attachment.loadItem(forTypeIdentifier: type.toUTTypeIdentifier) { [weak self] data, error in
-                                guard let this = self, error == nil else {
-                                    self?.dismissWithError()
+                                guard let this = self else {
                                     return
                                 }
-                                switch type {
-                                case .text:
-                                    if let text = data as? String {
-                                        this.handleMedia(forLiteral: text,
-                                                         type: type,
-                                                         index: index,
-                                                         content: content)
+                                this.mediaProcessingQueue.async {
+                                    defer { this.mediaLoadGroup.leave() }
+
+                                    guard error == nil else {
+                                        this.mediaLoadFailed = true
+                                        return
                                     }
-                                case .url:
-                                    if let url = data as? URL {
-                                        this.handleMedia(forLiteral: url.absoluteString,
-                                                         type: type,
-                                                         index: index,
-                                                         content: content)
-                                    }
-                                default:
-                                    if let url = data as? URL {
-                                        this.handleMedia(forFile: url,
-                                                         type: type,
-                                                         index: index,
-                                                         content: content)
-                                    }
-                                    else if let image = data as? UIImage {
-                                        this.handleMedia(forUIImage: image,
-                                                         type: type,
-                                                         index: index,
-                                                         content: content)
+
+                                    switch type {
+                                    case .text:
+                                        guard let text = data as? String else {
+                                            this.mediaLoadFailed = true
+                                            return
+                                        }
+                                        this.handleMedia(forLiteral: text, type: type, index: index, content: content)
+                                    case .url:
+                                        guard let url = data as? URL else {
+                                            this.mediaLoadFailed = true
+                                            return
+                                        }
+                                        this.handleMedia(forLiteral: url.absoluteString, type: type, index: index, content: content)
+                                    default:
+                                        if let url = data as? URL {
+                                            this.handleMedia(forFile: url, type: type, index: index, content: content)
+                                        } else if let image = data as? UIImage {
+                                            this.handleMedia(forUIImage: image, type: type, index: index, content: content)
+                                        } else if let imageData = data as? Data {
+                                            this.handleMedia(forImageData: imageData, type: type, index: index, content: content)
+                                        } else {
+                                            this.mediaLoadFailed = true
+                                        }
                                     }
                                 }
                             }
@@ -87,6 +106,10 @@ open class RSIShareViewController: SLComposeServiceViewController {
                     }
                 }
             }
+        }
+
+        mediaLoadGroup.notify(queue: .main) { [weak self] in
+            self?.redirectIfReady()
         }
     }
     
@@ -121,11 +144,6 @@ open class RSIShareViewController: SLComposeServiceViewController {
             mimeType: type == .text ? "text/plain": nil,
             type: type
         ))
-        if index == (content.attachments?.count ?? 0) - 1 {
-            if shouldAutoRedirect() {
-                saveAndRedirect()
-            }
-        }
     }
 
     private func handleMedia(forUIImage image: UIImage, type: SharedMediaType, index: Int, content: NSExtensionItem){
@@ -138,13 +156,29 @@ open class RSIShareViewController: SLComposeServiceViewController {
                 type: type
             ))
         }
-        if index == (content.attachments?.count ?? 0) - 1 {
-            if shouldAutoRedirect() {
-                saveAndRedirect()
-            }
-        }
     }
     
+    private func handleMedia(forImageData data: Data, type: SharedMediaType, index: Int, content: NSExtensionItem) {
+        guard let container = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: appGroupId
+        ) else {
+            mediaLoadFailed = true
+            return
+        }
+
+        let destination = container.appendingPathComponent("\(UUID().uuidString).png")
+        guard writeTempFile(data, to: destination) else {
+            mediaLoadFailed = true
+            return
+        }
+
+        sharedMedia.append(SharedMediaFile(
+            path: destination.path,
+            mimeType: "image/png",
+            type: .image
+        ))
+    }
+
     private func handleMedia(forFile url: URL, type: SharedMediaType, index: Int, content: NSExtensionItem) {
         let fileName = getFileName(from: url, type: type)
         let newPath = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId)!.appendingPathComponent(fileName)
@@ -173,10 +207,19 @@ open class RSIShareViewController: SLComposeServiceViewController {
             }
         }
         
-        if index == (content.attachments?.count ?? 0) - 1 {
-            if shouldAutoRedirect() {
-                saveAndRedirect()
-            }
+    }
+
+    private func redirectIfReady() {
+        guard !redirectCompleted else { return }
+        guard mediaLoadGroup.wait(timeout: .now()) == .success else { return }
+        guard !mediaLoadFailed else {
+            dismissWithError()
+            return
+        }
+
+        if redirectRequested || shouldAutoRedirect() {
+            redirectCompleted = true
+            saveAndRedirect(message: pendingMessage)
         }
     }
     
@@ -254,6 +297,19 @@ open class RSIShareViewController: SLComposeServiceViewController {
             }
             let pngData = image.pngData();
             try pngData?.write(to: dstURL);
+            return true;
+        } catch (let error){
+            print("Cannot write to temp file: \(error)");
+            return false;
+        }
+    }
+
+    private func writeTempFile(_ data: Data, to dstURL: URL) -> Bool {
+        do {
+            if FileManager.default.fileExists(atPath: dstURL.path) {
+                try FileManager.default.removeItem(at: dstURL)
+            }
+            try data.write(to: dstURL);
             return true;
         } catch (let error){
             print("Cannot write to temp file: \(error)");
