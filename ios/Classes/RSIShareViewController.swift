@@ -147,17 +147,27 @@ open class RSIShareViewController: SLComposeServiceViewController {
     }
 
     private func handleMedia(forUIImage image: UIImage, type: SharedMediaType, index: Int, content: NSExtensionItem){
-        let tempPath = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId)!.appendingPathComponent("TempImage.png")
-        if self.writeTempFile(image, to: tempPath) {
+        let tempPath = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId)!.appendingPathComponent("\(UUID().uuidString).png")
+        guard let pngData = image.pngData() else {
+            mediaLoadFailed = true
+            return
+        }
+        if self.writeTempFile(pngData, to: tempPath) {
             let newPathDecoded = tempPath.absoluteString.removingPercentEncoding!
             sharedMedia.append(SharedMediaFile(
                 path: newPathDecoded,
                 mimeType: type == .image ? "image/png": nil,
                 type: type
             ))
+        } else {
+            mediaLoadFailed = true
         }
     }
-    
+
+    // The share sheet can hand this case raw Data in any image format (e.g. JPEG,
+    // HEIC) — most commonly for a screenshot that hasn't been saved to Photos yet,
+    // so there's no asset URL to hand over. Decode it and re-encode as PNG so the
+    // file extension and mimeType we report stay accurate regardless of source format.
     private func handleMedia(forImageData data: Data, type: SharedMediaType, index: Int, content: NSExtensionItem) {
         guard let container = FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: appGroupId
@@ -165,15 +175,20 @@ open class RSIShareViewController: SLComposeServiceViewController {
             mediaLoadFailed = true
             return
         }
-
-        let destination = container.appendingPathComponent("\(UUID().uuidString).png")
-        guard writeTempFile(data, to: destination) else {
+        guard let image = UIImage(data: data), let pngData = image.pngData() else {
             mediaLoadFailed = true
             return
         }
 
+        let destination = container.appendingPathComponent("\(UUID().uuidString).png")
+        guard writeTempFile(pngData, to: destination) else {
+            mediaLoadFailed = true
+            return
+        }
+
+        let newPathDecoded = destination.absoluteString.removingPercentEncoding!
         sharedMedia.append(SharedMediaFile(
-            path: destination.path,
+            path: newPathDecoded,
             mimeType: "image/png",
             type: .image
         ))
@@ -183,36 +198,40 @@ open class RSIShareViewController: SLComposeServiceViewController {
         let fileName = getFileName(from: url, type: type)
         let newPath = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupId)!.appendingPathComponent(fileName)
         
-        if copyFile(at: url, to: newPath) {
-            // The path should be decoded because Flutter is not expecting url encoded file names
-            let newPathDecoded = newPath.absoluteString.removingPercentEncoding!;
-            if type == .video {
-                // Get video thumbnail and duration
-                if let videoInfo = getVideoInfo(from: url) {
-                    let thumbnailPathDecoded = videoInfo.thumbnail?.removingPercentEncoding;
-                    sharedMedia.append(SharedMediaFile(
-                        path: newPathDecoded,
-                        mimeType: url.mimeType(),
-                        thumbnail: thumbnailPathDecoded,
-                        duration: videoInfo.duration,
-                        type: type
-                    ))
-                }
-            } else {
-                sharedMedia.append(SharedMediaFile(
-                    path: newPathDecoded,
-                    mimeType: url.mimeType(),
-                    type: type
-                ))
-            }
+        guard copyFile(at: url, to: newPath) else {
+            mediaLoadFailed = true
+            return
         }
-        
+
+        // The path should be decoded because Flutter is not expecting url encoded file names
+        let newPathDecoded = newPath.absoluteString.removingPercentEncoding!
+        if type == .video {
+            // Get video thumbnail and duration
+            guard let videoInfo = getVideoInfo(from: url) else {
+                mediaLoadFailed = true
+                return
+            }
+            let thumbnailPathDecoded = videoInfo.thumbnail?.removingPercentEncoding
+            sharedMedia.append(SharedMediaFile(
+                path: newPathDecoded,
+                mimeType: url.mimeType(),
+                thumbnail: thumbnailPathDecoded,
+                duration: videoInfo.duration,
+                type: type
+            ))
+        } else {
+            sharedMedia.append(SharedMediaFile(
+                path: newPathDecoded,
+                mimeType: url.mimeType(),
+                type: type
+            ))
+        }
     }
 
     private func redirectIfReady() {
         guard !redirectCompleted else { return }
         guard mediaLoadGroup.wait(timeout: .now()) == .success else { return }
-        guard !mediaLoadFailed else {
+        guard !mediaLoadFailed, !sharedMedia.isEmpty else {
             dismissWithError()
             return
         }
@@ -288,20 +307,6 @@ open class RSIShareViewController: SLComposeServiceViewController {
             }
         }
         return name
-    }
-
-    private func writeTempFile(_ image: UIImage, to dstURL: URL) -> Bool {
-        do {
-            if FileManager.default.fileExists(atPath: dstURL.path) {
-                try FileManager.default.removeItem(at: dstURL)
-            }
-            let pngData = image.pngData();
-            try pngData?.write(to: dstURL);
-            return true;
-        } catch (let error){
-            print("Cannot write to temp file: \(error)");
-            return false;
-        }
     }
 
     private func writeTempFile(_ data: Data, to dstURL: URL) -> Bool {
