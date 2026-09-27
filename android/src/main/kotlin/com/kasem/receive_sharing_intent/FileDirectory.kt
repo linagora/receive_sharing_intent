@@ -99,9 +99,17 @@ object FileDirectory {
                 cursor = context.contentResolver.query(uri, projection, selection, selectionArgs, null)
                 if (cursor != null && cursor.moveToFirst()) {
                     val columnIndex = cursor.getColumnIndexOrThrow(column)
-                    val fileName = cursor.getString(columnIndex)
-                    Log.i("FileDirectory", "File name: $fileName")
-                    targetFile = File(context.cacheDir, fileName)
+                    // Use only the base name of the provider-supplied display
+                    // name so it is always resolved inside the app cache dir,
+                    // never a nested or parent path.
+                    val fileName = cursor.getString(columnIndex)?.let { File(it).name }
+                    if (!fileName.isNullOrEmpty()) {
+                        val candidate = File(context.cacheDir, fileName)
+                        val cacheRoot = context.cacheDir.canonicalPath + File.separator
+                        if (candidate.canonicalPath.startsWith(cacheRoot)) {
+                            targetFile = candidate
+                        }
+                    }
                 }
             } finally {
                 cursor?.close()
