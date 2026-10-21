@@ -61,6 +61,13 @@ class FileDirectoryContentUriTest {
     }
 
     @Test
+    fun getAbsolutePath_usesGeneratedNameForInvalidPathName() {
+        FakeProvider.displayName = "a\u0000b.jpg"
+
+        assertCopiedToGeneratedName(FileDirectory.getAbsolutePath(context, uri))
+    }
+
+    @Test
     fun getAbsolutePath_usesGeneratedNameForMissingName() {
         FakeProvider.displayName = null
 

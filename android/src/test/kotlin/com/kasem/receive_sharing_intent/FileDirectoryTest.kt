@@ -49,6 +49,11 @@ class FileDirectoryTest {
     }
 
     @Test
+    fun cacheFileFor_rejectsInvalidPath() {
+        assertNull(FileDirectory.cacheFileFor(tmp.root, "a\u0000b.jpg"))
+    }
+
+    @Test
     fun cacheFileFor_rejectsMissingName() {
         assertNull(FileDirectory.cacheFileFor(tmp.root, null))
     }

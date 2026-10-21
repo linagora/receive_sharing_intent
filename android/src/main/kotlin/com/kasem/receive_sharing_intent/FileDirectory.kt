@@ -10,6 +10,7 @@ import android.provider.DocumentsContract
 import android.provider.MediaStore
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.util.*
 import android.webkit.MimeTypeMap
 
@@ -148,14 +149,19 @@ object FileDirectory {
      *
      * @param cacheDir The app cache directory.
      * @param displayName The `_display_name` reported by the content provider.
-     * @return The target file, or null if no usable name is left.
+     * @return The target file, or null if no usable name is left or it is
+     * not a valid path.
      */
     internal fun cacheFileFor(cacheDir: File, displayName: String?): File? {
         val fileName = displayName?.let { File(it).name }
         if (fileName.isNullOrEmpty()) return null
         val candidate = File(cacheDir, fileName)
         val cacheRoot = cacheDir.canonicalPath + File.separator
-        return if (candidate.canonicalPath.startsWith(cacheRoot)) candidate else null
+        return try {
+            if (candidate.canonicalPath.startsWith(cacheRoot)) candidate else null
+        } catch (e: IOException) {
+            null
+        }
     }
 
 
