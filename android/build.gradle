@@ -33,6 +33,7 @@ android {
 
     sourceSets {
         main.java.srcDirs += 'src/main/kotlin'
+        test.java.srcDirs += 'src/test/kotlin'
     }
     defaultConfig {
         compileSdk 34
@@ -42,4 +43,9 @@ android {
     lintOptions {
         disable 'InvalidPackage'
     }
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.11.1'
 }
