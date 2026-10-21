@@ -1,0 +1,43 @@
+// Builds the plugin's android/ module on its own so its unit tests can run
+// without a Flutter app. It supplies what a host app normally provides: the
+// Android Gradle Plugin and the Flutter embedding of the installed Flutter SDK.
+//
+// Run from the repository root (needs Gradle 7.5, JDK 17, ANDROID_HOME and
+// `flutter` on the PATH):
+//   gradle -p .github/android-test-host :receive_sharing_intent:testDebugUnitTest
+
+import groovy.json.JsonSlurper
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath 'com.android.tools.build:gradle:7.3.1'
+        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22'
+    }
+}
+
+def flutterEngineRevision = new JsonSlurper()
+        .parseText(['flutter', '--version', '--machine'].execute().text)
+        .engineRevision
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url 'https://storage.googleapis.com/download.flutter.io' }
+    }
+}
+
+project(':receive_sharing_intent') {
+    plugins.withId('com.android.library') {
+        def embedding = "io.flutter:flutter_embedding_debug:1.0.0-$flutterEngineRevision"
+        dependencies {
+            compileOnly embedding
+            testImplementation embedding
+        }
+    }
+}

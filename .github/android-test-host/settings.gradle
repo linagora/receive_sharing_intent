@@ -1,0 +1,4 @@
+rootProject.name = 'android-test-host'
+
+include ':receive_sharing_intent'
+project(':receive_sharing_intent').projectDir = file('../../android')
