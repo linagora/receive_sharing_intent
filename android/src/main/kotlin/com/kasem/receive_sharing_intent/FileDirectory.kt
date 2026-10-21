@@ -12,7 +12,6 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.*
 import android.webkit.MimeTypeMap
-import android.util.Log
 
 
 object FileDirectory {
