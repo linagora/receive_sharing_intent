@@ -10,9 +10,9 @@ import android.provider.DocumentsContract
 import android.provider.MediaStore
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.util.*
 import android.webkit.MimeTypeMap
-import android.util.Log
 
 
 object FileDirectory {
@@ -99,9 +99,7 @@ object FileDirectory {
                 cursor = context.contentResolver.query(uri, projection, selection, selectionArgs, null)
                 if (cursor != null && cursor.moveToFirst()) {
                     val columnIndex = cursor.getColumnIndexOrThrow(column)
-                    val fileName = cursor.getString(columnIndex)
-                    Log.i("FileDirectory", "File name: $fileName")
-                    targetFile = File(context.cacheDir, fileName)
+                    targetFile = cacheFileFor(context.cacheDir, cursor.getString(columnIndex))
                 }
             } finally {
                 cursor?.close()
@@ -142,6 +140,28 @@ object FileDirectory {
             cursor?.close()
         }
         return null
+    }
+
+    /**
+     * Resolve a provider-supplied display name to a file directly inside
+     * [cacheDir]. Only the base name is used, so the result is never a nested
+     * or parent path.
+     *
+     * @param cacheDir The app cache directory.
+     * @param displayName The `_display_name` reported by the content provider.
+     * @return The target file, or null if no usable name is left or it is
+     * not a valid path.
+     */
+    internal fun cacheFileFor(cacheDir: File, displayName: String?): File? {
+        val fileName = displayName?.let { File(it).name }
+        if (fileName.isNullOrEmpty()) return null
+        val candidate = File(cacheDir, fileName)
+        val cacheRoot = cacheDir.canonicalPath + File.separator
+        return try {
+            if (candidate.canonicalPath.startsWith(cacheRoot)) candidate else null
+        } catch (e: IOException) {
+            null
+        }
     }
 
 
