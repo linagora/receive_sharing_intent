@@ -8,9 +8,11 @@ import android.os.Build
 import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.MediaStore
+import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.util.*
 import android.webkit.MimeTypeMap
 
@@ -78,6 +80,20 @@ object FileDirectory {
     }
 
     /**
+     * [getAbsolutePath], or null when [uri] cannot be read (no grant, file gone,
+     * provider error), so a bad share never crashes the host app.
+     */
+    fun getReadablePath(context: Context, uri: Uri): String? {
+        return try {
+            getAbsolutePath(context, uri)
+        } catch (e: Exception) {
+            // External input boundary: any provider failure means skip the file.
+            Log.w("FileDirectory", "Cannot read shared uri $uri", e)
+            null
+        }
+    }
+
+    /**
      * Get the value of the data column for this Uri. This is useful for
      * MediaStore Uris, and other file-based ContentProviders.
      *
@@ -90,41 +106,7 @@ object FileDirectory {
     private fun getDataColumn(context: Context, uri: Uri, selection: String?,
                               selectionArgs: Array<String>?): String? {
 
-        if (uri.authority != null) {
-            var cursor: Cursor? = null
-            val column = "_display_name"
-            val projection = arrayOf(column)
-            var targetFile: File? = null
-            try {
-                cursor = context.contentResolver.query(uri, projection, selection, selectionArgs, null)
-                if (cursor != null && cursor.moveToFirst()) {
-                    val columnIndex = cursor.getColumnIndexOrThrow(column)
-                    targetFile = cacheFileFor(context.cacheDir, cursor.getString(columnIndex))
-                }
-            } finally {
-                cursor?.close()
-            }
-
-            if (targetFile == null) {
-                val mimeType = context.contentResolver.getType(uri)
-                val prefix = with(mimeType ?: "") {
-                    when {
-                        startsWith("image") -> "IMG"
-                        startsWith("video") -> "VID"
-                        else -> "FILE"
-                    }
-                }
-                val type = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType)
-                targetFile = File(context.cacheDir, "${prefix}_${Date().time}.$type")
-            }
-
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(targetFile).use { fileOut ->
-                    input.copyTo(fileOut)
-                }
-            }
-            return targetFile.path
-        }
+        if (uri.authority != null) return copyToCacheDir(context, uri, selection, selectionArgs)
 
         var cursor: Cursor? = null
         val column = "_data"
@@ -140,6 +122,53 @@ object FileDirectory {
             cursor?.close()
         }
         return null
+    }
+
+    /** Copy the content behind [uri] into the cache dir; null when it has no readable stream. */
+    private fun copyToCacheDir(context: Context, uri: Uri, selection: String?,
+                               selectionArgs: Array<String>?): String? {
+        val targetFile = displayNameFile(context, uri, selection, selectionArgs)
+                ?: generatedNameFile(context, uri)
+        // A null stream means nothing was copied, so there is no file to report.
+        val input = context.contentResolver.openInputStream(uri) ?: return null
+        return copyOrCleanUp(input, targetFile)
+    }
+
+    private fun displayNameFile(context: Context, uri: Uri, selection: String?,
+                                selectionArgs: Array<String>?): File? {
+        val column = "_display_name"
+        val cursor = context.contentResolver.query(uri, arrayOf(column), selection, selectionArgs, null)
+        return cursor?.use {
+            if (!it.moveToFirst()) return null
+            cacheFileFor(context.cacheDir, it.getString(it.getColumnIndexOrThrow(column)))
+        }
+    }
+
+    private fun generatedNameFile(context: Context, uri: Uri): File {
+        val mimeType = context.contentResolver.getType(uri)
+        val prefix = with(mimeType ?: "") {
+            when {
+                startsWith("image") -> "IMG"
+                startsWith("video") -> "VID"
+                else -> "FILE"
+            }
+        }
+        val type = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType)
+        return File(context.cacheDir, "${prefix}_${Date().time}.$type")
+    }
+
+    private fun copyOrCleanUp(input: InputStream, targetFile: File): String {
+        // Copy aside and move on success, so a failed copy never touches an existing cache entry.
+        input.use { stream ->
+            val partFile = File.createTempFile("share_", ".part", targetFile.parentFile)
+            try {
+                FileOutputStream(partFile).use { stream.copyTo(it) }
+                if (!partFile.renameTo(targetFile)) throw IOException("Cannot move shared file to $targetFile")
+            } finally {
+                partFile.delete()
+            }
+        }
+        return targetFile.path
     }
 
     /**

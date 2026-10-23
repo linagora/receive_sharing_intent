@@ -9,6 +9,7 @@ import android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC
 import android.net.Uri
 import android.os.Parcelable
 import android.os.Build
+import android.util.Log
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -151,8 +152,12 @@ class ReceiveSharingIntentPlugin : FlutterPlugin, ActivityAware, MethodCallHandl
 
     // content can only be uri or string
     private fun toJsonObject(uri: Uri?, text: String?, mimeType: String?): JSONObject? {
-        val path = uri?.let { FileDirectory.getAbsolutePath(applicationContext, it) }
-        val mType = mimeType ?: path?.let { URLConnection.guessContentTypeFromName(path) }
+        val path = uri?.let { FileDirectory.getReadablePath(applicationContext, it) }
+        // Nothing to share: a null path would break SharedMediaFile on the Dart side.
+        if (path == null && text == null) return null
+        // The file was unreadable and only the text is left: it is text, whatever the file was.
+        val mType = if (path == null && uri != null) "text/plain"
+                else mimeType ?: path?.let { URLConnection.guessContentTypeFromName(path) }
         val type = MediaType.fromMimeType(mType)
         val (thumbnail, duration) = path?.let { getThumbnailAndDuration(path, type) }
                 ?: Pair(null, null)
@@ -164,14 +169,24 @@ class ReceiveSharingIntentPlugin : FlutterPlugin, ActivityAware, MethodCallHandl
                 .put("duration", duration)
     }
 
-    // Get video thumbnail and duration.
+    // Get video thumbnail and duration; a video that cannot be decoded is shared without them.
     private fun getThumbnailAndDuration(path: String, type: MediaType): Pair<String?, Long?> {
         if (type != MediaType.VIDEO) return Pair(null, null) // get thumbnail and duration for video only
         val retriever = MediaMetadataRetriever()
+        return try {
+            extractVideoThumbnail(retriever, path)
+        } catch (e: Exception) {
+            Log.w("ReceiveSharingIntent", "Cannot read video metadata of $path", e)
+            Pair(null, null)
+        } finally {
+            retriever.release()
+        }
+    }
+
+    private fun extractVideoThumbnail(retriever: MediaMetadataRetriever, path: String): Pair<String?, Long?> {
         retriever.setDataSource(path)
         val duration = retriever.extractMetadata(METADATA_KEY_DURATION)?.toLongOrNull()
         val bitmap = retriever.getScaledFrameAtTime(-1, OPTION_CLOSEST_SYNC, 360, 360)
-        retriever.release()
         if (bitmap == null) return Pair(null, null)
         val targetFile = File(applicationContext.cacheDir, "${File(path).name}.png")
         FileOutputStream(targetFile).use { out ->
