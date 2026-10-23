@@ -6,8 +6,10 @@ import android.content.Context
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -18,6 +20,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.FileNotFoundException
 
 @RunWith(RobolectricTestRunner::class)
 class FileDirectoryContentUriTest {
@@ -28,6 +31,8 @@ class FileDirectoryContentUriTest {
 
     @Before
     fun setUp() {
+        FakeProvider.displayName = "photo.jpg"
+        FakeProvider.queryError = null
         Robolectric.setupContentProvider(FakeProvider::class.java, AUTHORITY)
         shadowOf(context.contentResolver).registerInputStream(uri, ByteArrayInputStream(content))
     }
@@ -74,6 +79,32 @@ class FileDirectoryContentUriTest {
         assertCopiedToGeneratedName(FileDirectory.getAbsolutePath(context, uri))
     }
 
+    @Test
+    fun getReadablePath_copiesReadableFile() {
+        val path = FileDirectory.getReadablePath(context, uri)
+
+        assertEquals(File(context.cacheDir, "photo.jpg").path, path)
+        assertTrue(File(path!!).readBytes().contentEquals(content))
+    }
+
+    @Test
+    fun getReadablePath_returnsNullWhenProviderDeniesAccess() {
+        FakeProvider.queryError = SecurityException("no access")
+
+        assertNull(FileDirectory.getReadablePath(context, uri))
+    }
+
+    @Test
+    fun getReadablePath_returnsNullWhenFileIsGone() {
+        assertNull(FileDirectory.getReadablePath(context, Uri.parse("content://$AUTHORITY/missing/1")))
+    }
+
+    @Test
+    fun getReadablePath_returnsNullWhenStreamIsNull() {
+        assertNull(FileDirectory.getReadablePath(context, Uri.parse("content://$AUTHORITY/null-stream/1")))
+        assertFalse(File(context.cacheDir, "photo.jpg").exists())
+    }
+
     private fun assertCopiedToGeneratedName(path: String?) {
         val file = File(path!!)
         assertEquals(context.cacheDir.canonicalPath, file.parentFile!!.canonicalPath)
@@ -86,10 +117,16 @@ class FileDirectoryContentUriTest {
 
         override fun query(uri: Uri, projection: Array<out String>?, selection: String?,
                            selectionArgs: Array<out String>?, sortOrder: String?): Cursor {
+            queryError?.let { throw it }
             return MatrixCursor(arrayOf("_display_name")).apply { addRow(arrayOf(displayName)) }
         }
 
         override fun getType(uri: Uri) = "image/jpeg"
+
+        override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor? {
+            if (uri.pathSegments.first() == "null-stream") return null
+            throw FileNotFoundException("gone: $uri")
+        }
 
         override fun insert(uri: Uri, values: ContentValues?): Uri? = null
 
@@ -100,6 +137,7 @@ class FileDirectoryContentUriTest {
 
         companion object {
             var displayName: String? = null
+            var queryError: RuntimeException? = null
         }
     }
 
