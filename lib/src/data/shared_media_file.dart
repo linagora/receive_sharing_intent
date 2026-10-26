@@ -56,7 +56,10 @@ enum SharedMediaType {
   text('text'),
   file('file'),
   url('url'),
-  mailto('mailto');
+  mailto('mailto'),
+
+  /// Android only: a shared uri the app could not read; [SharedMediaFile.path] holds the uri, not a file.
+  unreadable('unreadable');
 
   final String value;
 

@@ -39,7 +39,7 @@ class ReceiveSharingIntentPlugin : FlutterPlugin, ActivityAware, MethodCallHandl
     private var eventSinkMedia: EventChannel.EventSink? = null
 
     private var binding: ActivityPluginBinding? = null
-    private lateinit var applicationContext: Context
+    internal lateinit var applicationContext: Context
 
     private fun setupCallbackChannels(binaryMessenger: BinaryMessenger) {
         val mChannel = MethodChannel(binaryMessenger, MESSAGES_CHANNEL)
@@ -128,21 +128,21 @@ class ReceiveSharingIntentPlugin : FlutterPlugin, ActivityAware, MethodCallHandl
         return when (intent.action) {
             Intent.ACTION_VIEW -> {
                 val uri = intent.data
-                toJsonObject(uri, null, intent.type)?.let { JSONArray(listOf(it)) }
+                JSONArray(toJsonObjects(uri, null, intent.type))
             }
 
             Intent.ACTION_SEND -> {
                 val uri = intent.parcelable<Uri>(Intent.EXTRA_STREAM)
                 val text = intent.getStringExtra(Intent.EXTRA_TEXT)
-                toJsonObject(uri, text, intent.type)?.let { JSONArray(listOf(it)) }
+                JSONArray(toJsonObjects(uri, text, intent.type))
             }
 
             Intent.ACTION_SEND_MULTIPLE -> {
                 val uris = intent.parcelableArrayList<Uri>(Intent.EXTRA_STREAM)
                 val mimeTypes = intent.getStringArrayExtra(Intent.EXTRA_MIME_TYPES)
 
-                uris?.mapIndexedNotNull { index, uri ->
-                    toJsonObject(uri, null, mimeTypes?.getOrNull(index))
+                uris?.flatMapIndexed { index, uri ->
+                    toJsonObjects(uri, null, mimeTypes?.getOrNull(index))
                 }?.let { JSONArray(it) }
             }
 
@@ -150,24 +150,37 @@ class ReceiveSharingIntentPlugin : FlutterPlugin, ActivityAware, MethodCallHandl
         }
     }
 
-    // content can only be uri or string
-    private fun toJsonObject(uri: Uri?, text: String?, mimeType: String?): JSONObject? {
+    // content can only be uri or string; an unreadable uri is reported, never dropped silently
+    private fun toJsonObjects(uri: Uri?, text: String?, mimeType: String?): List<JSONObject> {
         val path = uri?.let { FileDirectory.getReadablePath(applicationContext, it) }
-        // Nothing to share: a null path would break SharedMediaFile on the Dart side.
-        if (path == null && text == null) return null
+        if (path != null) return listOf(fileJsonObject(path, mimeType))
+        val unreadable = uri?.let { unreadableJsonObject(it, mimeType) }
         // The file was unreadable and only the text is left: it is text, whatever the file was.
-        val mType = if (path == null && uri != null) "text/plain"
-                else mimeType ?: path?.let { URLConnection.guessContentTypeFromName(path) }
+        val textObject = text?.let { textJsonObject(it, if (uri != null) "text/plain" else mimeType) }
+        return listOfNotNull(unreadable, textObject)
+    }
+
+    private fun fileJsonObject(path: String, mimeType: String?): JSONObject {
+        val mType = mimeType ?: URLConnection.guessContentTypeFromName(path)
         val type = MediaType.fromMimeType(mType)
-        val (thumbnail, duration) = path?.let { getThumbnailAndDuration(path, type) }
-                ?: Pair(null, null)
+        val (thumbnail, duration) = getThumbnailAndDuration(path, type)
         return JSONObject()
-                .put("path", path ?: text)
+                .put("path", path)
                 .put("type", type.value)
                 .put("mimeType", mType)
                 .put("thumbnail", thumbnail)
                 .put("duration", duration)
     }
+
+    private fun textJsonObject(text: String, mimeType: String?): JSONObject = JSONObject()
+            .put("path", text)
+            .put("type", MediaType.fromMimeType(mimeType).value)
+            .put("mimeType", mimeType)
+
+    private fun unreadableJsonObject(uri: Uri, mimeType: String?): JSONObject = JSONObject()
+            .put("path", uri.toString())
+            .put("type", MediaType.UNREADABLE.value)
+            .put("mimeType", mimeType)
 
     // Get video thumbnail and duration; a video that cannot be decoded is shared without them.
     private fun getThumbnailAndDuration(path: String, type: MediaType): Pair<String?, Long?> {
@@ -197,7 +210,8 @@ class ReceiveSharingIntentPlugin : FlutterPlugin, ActivityAware, MethodCallHandl
     }
 
     enum class MediaType(val value: String) {
-        IMAGE("image"), VIDEO("video"), TEXT("text"), FILE("file"), URL("url"), MAILTO("mailto");
+        IMAGE("image"), VIDEO("video"), TEXT("text"), FILE("file"), URL("url"), MAILTO("mailto"),
+        UNREADABLE("unreadable");
 
         companion object {
             fun fromMimeType(mimeType: String?): MediaType {
