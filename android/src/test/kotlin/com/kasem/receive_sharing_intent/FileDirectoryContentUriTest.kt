@@ -140,7 +140,9 @@ class FileDirectoryContentUriTest {
 
     @Test
     fun getReadablePath_returnsNullWhenTargetNameIsADirectory() {
+        // Non-empty, since macOS lets rename replace an empty directory.
         val directory = File(context.cacheDir, "photo.jpg").apply { mkdir() }
+        File(directory, "keep.txt").writeText("keep")
 
         assertNull(FileDirectory.getReadablePath(context, uri))
         assertTrue(directory.isDirectory)
