@@ -1,12 +1,16 @@
 package com.kasem.receive_sharing_intent
 
+import android.content.ComponentName
 import android.content.ContentProvider
 import android.content.ContentValues
 import android.content.Context
+import android.content.IntentFilter
+import android.content.pm.ProviderInfo
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import android.provider.DocumentsContract
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -143,6 +147,45 @@ class FileDirectoryContentUriTest {
         assertNoPartFileLeft()
     }
 
+    @Test
+    fun getReadablePath_copiesMediaDocumentFromSharedUri() {
+        val document = mediaDocumentUri("document:42")
+
+        val path = FileDirectory.getReadablePath(context, document)
+
+        assertEquals(File(context.cacheDir, "photo.jpg").path, path)
+        assertTrue(File(path!!).readBytes().contentEquals(content))
+    }
+
+    @Test
+    fun getReadablePath_copiesMediaImageFromSharedUri() {
+        val image = mediaDocumentUri("image:42")
+
+        val path = FileDirectory.getReadablePath(context, image)
+
+        assertEquals(File(context.cacheDir, "photo.jpg").path, path)
+        assertTrue(File(path!!).readBytes().contentEquals(content))
+    }
+
+    private fun mediaDocumentUri(documentId: String): Uri {
+        Robolectric.setupContentProvider(FakeProvider::class.java, MEDIA_DOCUMENTS_AUTHORITY)
+        val component = ComponentName(context.packageName, FakeProvider::class.java.name)
+        shadowOf(context.packageManager).apply {
+            addOrUpdateProvider(ProviderInfo().apply {
+                authority = MEDIA_DOCUMENTS_AUTHORITY
+                packageName = component.packageName
+                name = component.className
+                exported = true
+            })
+            addIntentFilterForProvider(component, IntentFilter(DocumentsContract.PROVIDER_INTERFACE))
+        }
+        val document = DocumentsContract.buildDocumentUri(MEDIA_DOCUMENTS_AUTHORITY, documentId)
+        // Without this the test would pass through the plain content branch.
+        assertTrue(DocumentsContract.isDocumentUri(context, document))
+        shadowOf(context.contentResolver).registerInputStream(document, ByteArrayInputStream(content))
+        return document
+    }
+
     private fun assertNoPartFileLeft() {
         assertEquals(emptyList<String>(), context.cacheDir.list()!!.filter { it.endsWith(".part") })
     }
@@ -199,5 +242,6 @@ class FileDirectoryContentUriTest {
 
     private companion object {
         const val AUTHORITY = "com.kasem.receive_sharing_intent.test"
+        const val MEDIA_DOCUMENTS_AUTHORITY = "com.android.providers.media.documents"
     }
 }
