@@ -100,6 +100,17 @@ class ReceiveSharingIntentPluginTest {
         assertEquals("unreadable", entries.getJSONObject(0).getString("type"))
     }
 
+    @Test
+    fun send_textOnly_keepsSharedMimeType() {
+        plugin.onNewIntent(Intent(Intent.ACTION_SEND).setType("text/html").putExtra(Intent.EXTRA_TEXT, "<b>hi</b>"))
+
+        val entries = events.single()
+        assertEquals(1, entries.length())
+        assertEquals("<b>hi</b>", entries.getJSONObject(0).getString("path"))
+        assertEquals("text", entries.getJSONObject(0).getString("type"))
+        assertEquals("text/html", entries.getJSONObject(0).getString("mimeType"))
+    }
+
     private companion object {
         const val AUTHORITY = "com.kasem.receive_sharing_intent.test"
     }
