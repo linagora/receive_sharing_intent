@@ -21,6 +21,8 @@ import org.robolectric.Shadows.shadowOf
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileNotFoundException
+import java.io.IOException
+import java.io.InputStream
 
 @RunWith(RobolectricTestRunner::class)
 class FileDirectoryContentUriTest {
@@ -105,11 +107,64 @@ class FileDirectoryContentUriTest {
         assertFalse(File(context.cacheDir, "photo.jpg").exists())
     }
 
+    @Test
+    fun getReadablePath_returnsNullWhenStreamAccessIsDenied() {
+        assertNull(FileDirectory.getReadablePath(context, Uri.parse("content://$AUTHORITY/denied/1")))
+    }
+
+    @Test
+    fun getReadablePath_replacesExistingCacheFile() {
+        File(context.cacheDir, "photo.jpg").writeText("old")
+
+        val path = FileDirectory.getReadablePath(context, uri)
+
+        assertEquals(File(context.cacheDir, "photo.jpg").path, path)
+        assertTrue(File(path!!).readBytes().contentEquals(content))
+        assertNoPartFileLeft()
+    }
+
+    @Test
+    fun getReadablePath_keepsExistingCacheFileWhenCopyFails() {
+        val broken = Uri.parse("content://$AUTHORITY/broken/1")
+        shadowOf(context.contentResolver).registerInputStream(broken, FailingInputStream())
+        File(context.cacheDir, "photo.jpg").writeText("old")
+
+        assertNull(FileDirectory.getReadablePath(context, broken))
+        assertEquals("old", File(context.cacheDir, "photo.jpg").readText())
+        assertNoPartFileLeft()
+    }
+
+    @Test
+    fun getReadablePath_returnsNullWhenTargetNameIsADirectory() {
+        val directory = File(context.cacheDir, "photo.jpg").apply { mkdir() }
+
+        assertNull(FileDirectory.getReadablePath(context, uri))
+        assertTrue(directory.isDirectory)
+        assertNoPartFileLeft()
+    }
+
+    private fun assertNoPartFileLeft() {
+        assertEquals(emptyList<String>(), context.cacheDir.list()!!.filter { it.endsWith(".part") })
+    }
+
     private fun assertCopiedToGeneratedName(path: String?) {
         val file = File(path!!)
         assertEquals(context.cacheDir.canonicalPath, file.parentFile!!.canonicalPath)
         assertTrue(file.name.startsWith("IMG_"))
         assertTrue(file.readBytes().contentEquals(content))
+    }
+
+    private class FailingInputStream : InputStream() {
+        private var delivered = false
+
+        override fun read(): Int = throw IOException("stream broken")
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            if (delivered) throw IOException("stream broken")
+            delivered = true
+            b[off] = 'x'.code.toByte()
+            return 1
+        }
     }
 
     class FakeProvider : ContentProvider() {
@@ -125,6 +180,7 @@ class FileDirectoryContentUriTest {
 
         override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor? {
             if (uri.pathSegments.first() == "null-stream") return null
+            if (uri.pathSegments.first() == "denied") throw SecurityException("no grant: $uri")
             throw FileNotFoundException("gone: $uri")
         }
 
