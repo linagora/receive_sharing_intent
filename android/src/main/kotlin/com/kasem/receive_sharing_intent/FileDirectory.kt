@@ -127,7 +127,7 @@ object FileDirectory {
     /** Copy the content behind [uri] into the cache dir; null when it has no readable stream. */
     private fun copyToCacheDir(context: Context, uri: Uri, selection: String?,
                                selectionArgs: Array<String>?): String? {
-        val targetFile = displayNameFile(context, uri, selection, selectionArgs)
+        val targetFile = runCatching { displayNameFile(context, uri, selection, selectionArgs) }.getOrNull()
                 ?: generatedNameFile(context, uri)
         // A null stream means nothing was copied, so there is no file to report.
         val input = context.contentResolver.openInputStream(uri) ?: return null

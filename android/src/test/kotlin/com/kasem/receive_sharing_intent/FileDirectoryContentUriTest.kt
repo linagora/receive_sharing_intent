@@ -90,10 +90,10 @@ class FileDirectoryContentUriTest {
     }
 
     @Test
-    fun getReadablePath_returnsNullWhenProviderDeniesAccess() {
-        FakeProvider.queryError = SecurityException("no access")
+    fun getReadablePath_usesGeneratedNameWhenNameLookupFails() {
+        FakeProvider.queryError = UnsupportedOperationException("no query")
 
-        assertNull(FileDirectory.getReadablePath(context, uri))
+        assertCopiedToGeneratedName(FileDirectory.getReadablePath(context, uri))
     }
 
     @Test
