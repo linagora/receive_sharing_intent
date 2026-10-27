@@ -189,7 +189,7 @@ class ReceiveSharingIntentPlugin : FlutterPlugin, ActivityAware, MethodCallHandl
         return try {
             extractVideoThumbnail(retriever, path)
         } catch (e: Exception) {
-            Log.w("ReceiveSharingIntent", "Cannot read video metadata of $path", e)
+            Log.w("ReceiveSharingIntent", "Cannot read video metadata: ${e.javaClass.simpleName}")
             Pair(null, null)
         } finally {
             retriever.release()

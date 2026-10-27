@@ -88,7 +88,7 @@ object FileDirectory {
             getAbsolutePath(context, uri)
         } catch (e: Exception) {
             // External input boundary: any provider failure means skip the file.
-            Log.w("FileDirectory", "Cannot read shared uri $uri", e)
+            Log.w("FileDirectory", "Cannot read shared uri from ${uri.authority}: ${e.javaClass.simpleName}")
             null
         }
     }
