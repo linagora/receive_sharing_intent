@@ -1,13 +1,19 @@
 package com.kasem.receive_sharing_intent
 
+import android.content.ComponentName
 import android.content.ContentProvider
 import android.content.ContentValues
 import android.content.Context
+import android.content.IntentFilter
+import android.content.pm.ProviderInfo
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
+import android.os.ParcelFileDescriptor
+import android.provider.DocumentsContract
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -18,6 +24,9 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.FileNotFoundException
+import java.io.IOException
+import java.io.InputStream
 
 @RunWith(RobolectricTestRunner::class)
 class FileDirectoryContentUriTest {
@@ -28,6 +37,8 @@ class FileDirectoryContentUriTest {
 
     @Before
     fun setUp() {
+        FakeProvider.displayName = "photo.jpg"
+        FakeProvider.queryError = null
         Robolectric.setupContentProvider(FakeProvider::class.java, AUTHORITY)
         shadowOf(context.contentResolver).registerInputStream(uri, ByteArrayInputStream(content))
     }
@@ -74,6 +85,125 @@ class FileDirectoryContentUriTest {
         assertCopiedToGeneratedName(FileDirectory.getAbsolutePath(context, uri))
     }
 
+    @Test
+    fun getReadablePath_copiesReadableFile() {
+        val path = FileDirectory.getReadablePath(context, uri)
+
+        assertEquals(File(context.cacheDir, "photo.jpg").path, path)
+        assertTrue(File(path!!).readBytes().contentEquals(content))
+    }
+
+    @Test
+    fun getReadablePath_usesGeneratedNameWhenNameLookupFails() {
+        FakeProvider.queryError = UnsupportedOperationException("no query")
+
+        assertCopiedToGeneratedName(FileDirectory.getReadablePath(context, uri))
+    }
+
+    @Test
+    fun getReadablePath_returnsNullWhenFileIsGone() {
+        assertNull(FileDirectory.getReadablePath(context, Uri.parse("content://$AUTHORITY/missing/1")))
+    }
+
+    @Test
+    fun getReadablePath_returnsNullWhenStreamIsNull() {
+        assertNull(FileDirectory.getReadablePath(context, Uri.parse("content://$AUTHORITY/null-stream/1")))
+        assertFalse(File(context.cacheDir, "photo.jpg").exists())
+    }
+
+    @Test
+    fun getReadablePath_returnsNullWhenStreamAccessIsDenied() {
+        assertNull(FileDirectory.getReadablePath(context, Uri.parse("content://$AUTHORITY/denied/1")))
+    }
+
+    @Test
+    fun getReadablePath_replacesExistingCacheFile() {
+        File(context.cacheDir, "photo.jpg").writeText("old")
+
+        val path = FileDirectory.getReadablePath(context, uri)
+
+        assertEquals(File(context.cacheDir, "photo.jpg").path, path)
+        assertTrue(File(path!!).readBytes().contentEquals(content))
+        assertNoPartFileLeft()
+    }
+
+    @Test
+    fun getReadablePath_keepsExistingCacheFileWhenCopyFails() {
+        val broken = Uri.parse("content://$AUTHORITY/broken/1")
+        shadowOf(context.contentResolver).registerInputStream(broken, FailingInputStream())
+        File(context.cacheDir, "photo.jpg").writeText("old")
+
+        assertNull(FileDirectory.getReadablePath(context, broken))
+        assertEquals("old", File(context.cacheDir, "photo.jpg").readText())
+        assertNoPartFileLeft()
+    }
+
+    @Test
+    fun getReadablePath_returnsNullWhenTargetNameIsADirectory() {
+        // Non-empty, since macOS lets rename replace an empty directory.
+        val directory = File(context.cacheDir, "photo.jpg").apply { mkdir() }
+        File(directory, "keep.txt").writeText("keep")
+
+        assertNull(FileDirectory.getReadablePath(context, uri))
+        assertTrue(directory.isDirectory)
+        assertNoPartFileLeft()
+    }
+
+    @Test
+    fun getReadablePath_copiesMediaDocumentFromSharedUri() {
+        assertCopiedFromSharedUri(documentUri(MEDIA_DOCUMENTS_AUTHORITY, "document:42"))
+    }
+
+    @Test
+    fun getReadablePath_copiesMediaImageFromSharedUri() {
+        assertCopiedFromSharedUri(documentUri(MEDIA_DOCUMENTS_AUTHORITY, "image:42"))
+    }
+
+    @Test
+    fun getReadablePath_copiesInternalStorageDocumentFromSharedUri() {
+        assertCopiedFromSharedUri(documentUri(EXTERNAL_STORAGE_DOCUMENTS_AUTHORITY, "primary:Download/report.pdf"))
+    }
+
+    @Test
+    fun getReadablePath_copiesDownloadsDocumentFromSharedUri() {
+        assertCopiedFromSharedUri(documentUri(DOWNLOADS_DOCUMENTS_AUTHORITY, "42"))
+    }
+
+    @Test
+    fun getReadablePath_copiesOtherProviderDocumentFromSharedUri() {
+        assertCopiedFromSharedUri(documentUri(OTHER_DOCUMENTS_AUTHORITY, "doc:42"))
+    }
+
+    private fun assertCopiedFromSharedUri(document: Uri) {
+        val path = FileDirectory.getReadablePath(context, document)
+
+        assertEquals(File(context.cacheDir, "photo.jpg").path, path)
+        assertTrue(File(path!!).readBytes().contentEquals(content))
+    }
+
+    private fun documentUri(documentAuthority: String, documentId: String): Uri {
+        Robolectric.setupContentProvider(FakeProvider::class.java, documentAuthority)
+        val component = ComponentName(context.packageName, FakeProvider::class.java.name)
+        shadowOf(context.packageManager).apply {
+            addOrUpdateProvider(ProviderInfo().apply {
+                authority = documentAuthority
+                packageName = component.packageName
+                name = component.className
+                exported = true
+            })
+            addIntentFilterForProvider(component, IntentFilter(DocumentsContract.PROVIDER_INTERFACE))
+        }
+        val document = DocumentsContract.buildDocumentUri(documentAuthority, documentId)
+        // Without this the test would pass through the plain content branch.
+        assertTrue(DocumentsContract.isDocumentUri(context, document))
+        shadowOf(context.contentResolver).registerInputStream(document, ByteArrayInputStream(content))
+        return document
+    }
+
+    private fun assertNoPartFileLeft() {
+        assertEquals(emptyList<String>(), context.cacheDir.list()!!.filter { it.endsWith(".part") })
+    }
+
     private fun assertCopiedToGeneratedName(path: String?) {
         val file = File(path!!)
         assertEquals(context.cacheDir.canonicalPath, file.parentFile!!.canonicalPath)
@@ -81,15 +211,35 @@ class FileDirectoryContentUriTest {
         assertTrue(file.readBytes().contentEquals(content))
     }
 
+    private class FailingInputStream : InputStream() {
+        private var delivered = false
+
+        override fun read(): Int = throw IOException("stream broken")
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            if (delivered) throw IOException("stream broken")
+            delivered = true
+            b[off] = 'x'.code.toByte()
+            return 1
+        }
+    }
+
     class FakeProvider : ContentProvider() {
         override fun onCreate() = true
 
         override fun query(uri: Uri, projection: Array<out String>?, selection: String?,
                            selectionArgs: Array<out String>?, sortOrder: String?): Cursor {
+            queryError?.let { throw it }
             return MatrixCursor(arrayOf("_display_name")).apply { addRow(arrayOf(displayName)) }
         }
 
         override fun getType(uri: Uri) = "image/jpeg"
+
+        override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor? {
+            if (uri.pathSegments.first() == "null-stream") return null
+            if (uri.pathSegments.first() == "denied") throw SecurityException("no grant: $uri")
+            throw FileNotFoundException("gone: $uri")
+        }
 
         override fun insert(uri: Uri, values: ContentValues?): Uri? = null
 
@@ -100,10 +250,15 @@ class FileDirectoryContentUriTest {
 
         companion object {
             var displayName: String? = null
+            var queryError: RuntimeException? = null
         }
     }
 
     private companion object {
         const val AUTHORITY = "com.kasem.receive_sharing_intent.test"
+        const val MEDIA_DOCUMENTS_AUTHORITY = "com.android.providers.media.documents"
+        const val EXTERNAL_STORAGE_DOCUMENTS_AUTHORITY = "com.android.externalstorage.documents"
+        const val DOWNLOADS_DOCUMENTS_AUTHORITY = "com.android.providers.downloads.documents"
+        const val OTHER_DOCUMENTS_AUTHORITY = "com.kasem.receive_sharing_intent.test.documents"
     }
 }

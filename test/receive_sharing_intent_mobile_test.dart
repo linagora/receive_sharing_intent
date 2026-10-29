@@ -44,6 +44,34 @@ void main() {
     }
   });
 
+  test('getInitialMedia decodes an unreadable uri marker', () async {
+    const json =
+        '[{"path":"content://media/external/file/1","type":"unreadable"}]';
+
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(methodChannel, (methodCall) async {
+      if (methodCall.method == 'getInitialMedia') {
+        return json;
+      }
+      return null;
+    });
+
+    final mediaFiles = await instance.getInitialMedia();
+
+    expect(mediaFiles.length, 1);
+    expect(mediaFiles.single.type, SharedMediaType.unreadable);
+    expect(mediaFiles.single.path, 'content://media/external/file/1');
+  });
+
+  test('SharedMediaFile.fromMap decodes the unreadable type', () {
+    final file = SharedMediaFile.fromMap({
+      'path': 'content://media/external/file/1',
+      'type': 'unreadable',
+    });
+
+    expect(file.type, SharedMediaType.unreadable);
+  });
+
   test('getMediaStream', () async {
     final expectedMediaFiles = [
       SharedMediaFile(path: 'path1', type: SharedMediaType.image),
