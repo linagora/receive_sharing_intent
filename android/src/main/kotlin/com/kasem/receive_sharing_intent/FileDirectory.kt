@@ -1,12 +1,9 @@
 package com.kasem.receive_sharing_intent
 
-import android.content.ContentUris
 import android.content.Context
 import android.database.Cursor
 import android.net.Uri
 import android.os.Build
-import android.os.Environment
-import android.provider.DocumentsContract
 import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
@@ -19,48 +16,16 @@ import android.webkit.MimeTypeMap
 object FileDirectory {
 
     /**
-     * Get a file path from a Uri. This will get the the path for Storage Access
-     * Framework Documents, as well as the _data field for the MediaStore and
-     * other file-based ContentProviders.
+     * Get a file path for a shared Uri. A content Uri is copied into the cache
+     * dir from the Uri itself, since only it carries the sender's read grant.
      *
      * @param context The context.
-     * @param uri The Uri to query.
-     * @author paulburke
+     * @param uri The Uri to read.
      */
     fun getAbsolutePath(context: Context, uri: Uri): String? {
-
-        // DocumentProvider
-        if (DocumentsContract.isDocumentUri(context, uri)) {
-            // ExternalStorageProvider
-            if (isExternalStorageDocument(uri)) {
-                val docId = DocumentsContract.getDocumentId(uri)
-                val split = docId.split(":".toRegex()).dropLastWhile { it.isEmpty() }.toTypedArray()
-                val type = split[0]
-
-                return if ("primary".equals(type, ignoreCase = true)) {
-                    Environment.getExternalStorageDirectory().toString() + "/" + split[1]
-                } else {
-                    getDataColumn(context, uri, null, null)
-                }
-            } else if (isDownloadsDocument(uri)) {
-                return try {
-                    val id = DocumentsContract.getDocumentId(uri)
-                    val contentUri = ContentUris.withAppendedId(
-                            Uri.parse("content://downloads/public_downloads"), java.lang.Long.valueOf(id))
-
-                    getDataColumn(context, contentUri, null, null)
-                } catch (exception: Exception) {
-                    getDataColumn(context, uri, null, null)
-                }
-            } else if (isMediaDocument(uri)) {
-                // Only the shared URI carries the read grant; a MediaStore lookup by id needs media permissions.
-                return getDataColumn(context, uri, null, null)
-            }// MediaProvider
-            // DownloadsProvider
-        } else if ("content".equals(uri.scheme, ignoreCase = true)) {
+        if ("content".equals(uri.scheme, ignoreCase = true)) {
             return getDataColumn(context, uri, null, null)
         }
-
         return uri.path
     }
 
@@ -176,30 +141,5 @@ object FileDirectory {
         } catch (e: IOException) {
             null
         }
-    }
-
-
-    /**
-     * @param uri The Uri to check.
-     * @return Whether the Uri authority is ExternalStorageProvider.
-     */
-    fun isExternalStorageDocument(uri: Uri): Boolean {
-        return "com.android.externalstorage.documents" == uri.authority
-    }
-
-    /**
-     * @param uri The Uri to check.
-     * @return Whether the Uri authority is DownloadsProvider.
-     */
-    fun isDownloadsDocument(uri: Uri): Boolean {
-        return "com.android.providers.downloads.documents" == uri.authority
-    }
-
-    /**
-     * @param uri The Uri to check.
-     * @return Whether the Uri authority is MediaProvider.
-     */
-    fun isMediaDocument(uri: Uri): Boolean {
-        return "com.android.providers.media.documents" == uri.authority
     }
 }
